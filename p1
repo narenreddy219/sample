@@ -1,0 +1,74 @@
+You are a senior Python Data Engineer.
+
+Create a Jupyter Notebook using Python and Pandas to compare two separate engine output files.
+
+Business requirement:
+- The two files are outputs from two different engine runs.
+- Both files are expected to contain the same records and columns.
+- The rows may not be in the same order.
+- Sort both files using ORDER_NO only.
+- After sorting, reset the index and compare File 1 row 1 with File 2 row 1, File 1 row 2 with File 2 row 2, and so on.
+- Compare every common column.
+
+Configuration:
+
+FILE_1 = "engine_run_1.xlsx"
+FILE_2 = "engine_run_2.xlsx"
+OUTPUT_FILE = "engine_comparison_report.xlsx"
+
+SORT_COLUMNS = ["ORDER_NO"]
+
+Requirements:
+
+1. Read Excel or CSV input files.
+2. Normalize column names:
+   - Trim spaces
+   - Convert column names to uppercase
+3. Normalize values:
+   - Convert null values to blank
+   - Trim text values
+   - Normalize numeric values where practical
+4. Validate that ORDER_NO exists in both files.
+5. Produce profiling statistics:
+   - Total records in File 1
+   - Total records in File 2
+   - Total columns
+   - Distinct ORDER_NO count
+   - Duplicate ORDER_NO count
+   - Blank ORDER_NO count
+6. Sort both files by ORDER_NO only using a stable sort:
+   sort_values(["ORDER_NO"], kind="mergesort")
+7. Reset the index after sorting.
+8. Add ROW_NUMBER starting from 1.
+9. Compare every common column positionally.
+10. For each mismatched cell, capture:
+    - ROW_NUMBER
+    - ORDER_NO_FILE_1
+    - ORDER_NO_FILE_2
+    - COLUMN_NAME
+    - FILE_1_VALUE
+    - FILE_2_VALUE
+11. Identify:
+    - Fully matched rows
+    - Mismatched rows
+    - Extra rows in File 1
+    - Extra rows in File 2
+    - Columns missing from either file
+12. Generate an Excel report with these sheets:
+    - Summary
+    - Row_Status
+    - Column_Mismatches
+    - Only_in_File_1
+    - Only_in_File_2
+    - Missing_Columns
+13. Write modular functions:
+    - read_file()
+    - normalize_dataframe()
+    - profile_dataframe()
+    - sort_dataframe()
+    - compare_positionally()
+    - export_report()
+14. Add clear comments and error handling.
+15. Do not use BREAK_ID or any other composite key.
+16. Clearly add a warning in the notebook:
+    ORDER_NO is not unique, so duplicate ORDER_NO records will retain their original relative order because a stable sort is used. If the two engines output duplicate ORDER_NO rows in different relative orders, false mismatches may appear.
