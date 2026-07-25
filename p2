@@ -1,0 +1,72 @@
+package com.citi.olympus.gru.dataconnector
+
+import org.apache.spark.sql.{DataFrame, SaveMode, SparkSession}
+import org.scalatest.funsuite.AnyFunSuite
+import org.scalatest.matchers.should.Matchers
+import java.nio.file.{Files, Paths}
+
+class KafkaReconSampleDownloadTest extends AnyFunSuite with Matchers {
+
+  // 1. Local Spark Session initialized for testing
+  implicit val spark: SparkSession = SparkSession.builder()
+    .appName("KafkaReconSampleDownloadTest")
+    .master("local[*]")
+    .getOrCreate()
+
+  /**
+   * Utility to dump output DataFrame locally for inspection
+   */
+  private def dumpDataToLocalTmp(df: DataFrame, reconId: String): String = {
+    val localDirectory = s"C:/tmp/location/$reconId"
+    Files.createDirectories(Paths.get(localDirectory))
+
+    df.coalesce(1)
+      .write
+      .mode(SaveMode.Overwrite)
+      .option("header", "true")
+      .json(localDirectory)
+
+    println(s"--> Recon dataset dumped locally to: $localDirectory")
+    localDirectory
+  }
+
+  // =========================================================================
+  // Test Case 1: Avro Format - Production Traversal
+  // =========================================================================
+  test("Traverse Production Flow for Avro Recon") {
+    val reconId = "RECON_AVRO_1001" // Supply your Avro recon ID here
+
+    // Step A: Fetch configuration/metadata using reconId (Bootstrap Server, Topics, Schemas)
+    val reconCommonProperties: Map[String, String] = MetadataConfigBuilder.getProperties(reconId)
+
+    // Step B: Call Production Entry Point
+    // Flow: TestSuite -> KafkaProcessor.processKafkaData -> AvroProcessingUtility
+    val resultDf: DataFrame = KafkaProcessor.processKafkaData(spark, reconCommonProperties)
+
+    // Step C: Dump reconciled records to C:/tmp/location/<reconId>
+    dumpDataToLocalTmp(resultDf, reconId)
+
+    // Step D: Verify output
+    resultDf.count() shouldBe > (0L)
+  }
+
+  // =========================================================================
+  // Test Case 2: Non-Avro Format - Production Traversal
+  // =========================================================================
+  test("Traverse Production Flow for Non-Avro Recon") {
+    val reconId = "RECON_NON_AVRO_2002" // Supply your Non-Avro recon ID here
+
+    // Step A: Fetch configuration/metadata using reconId
+    val reconCommonProperties: Map[String, String] = MetadataConfigBuilder.getProperties(reconId)
+
+    // Step B: Call Production Entry Point
+    // Flow: TestSuite -> KafkaProcessor.processKafkaData -> AvroProcessingUtility
+    val resultDf: DataFrame = KafkaProcessor.processKafkaData(spark, reconCommonProperties)
+
+    // Step C: Dump reconciled records to C:/tmp/location/<reconId>
+    dumpDataToLocalTmp(resultDf, reconId)
+
+    // Step D: Verify output
+    resultDf.count() shouldBe > (0L)
+  }
+}
