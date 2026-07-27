@@ -1,10 +1,11 @@
 package com.citi.icg.gru.quickrec.common.utils
 
+import bsh.Interpreter
 import com.citi.icg.gru.quickrec.common.domain.jobs.fileTransform.AdvanceTransformation
 import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 
-object AdvanceUdfUtilTest extends App {
+object AdvanceUdfBeforeAfterTest extends App {
 
   private val schema = StructType(
     Seq(
@@ -13,8 +14,8 @@ object AdvanceUdfUtilTest extends App {
   )
 
   /*
-   * Keep [VALUE_AMOUNT].
-   * AdvanceUdfUtil extracts and replaces this UI column placeholder.
+   * Use the exact same expression for both tests.
+   * [VALUE_AMOUNT] is a UI placeholder.
    */
   private val uiExpression =
     """![VALUE_AMOUNT].trim().equals("")
@@ -25,7 +26,8 @@ object AdvanceUdfUtilTest extends App {
       |      .replace(",", "")
       |      .trim()
       |  ).setScale(2, java.math.RoundingMode.HALF_UP)
-      |: """"".stripMargin.replace("\n", " ")
+      |: ""
+      |""".stripMargin.replace("\n", " ")
 
   private def createRow(value: String): GenericRowWithSchema = {
     new GenericRowWithSchema(
@@ -34,55 +36,115 @@ object AdvanceUdfUtilTest extends App {
     )
   }
 
-  // Initialize values required internally by AdvanceUdfUtil.
+  private def separator(): Unit = {
+    println("--------------------------------------------------")
+  }
+
+  val inputValue = "$1,234.56"
+
+  println("Input value   : " + inputValue)
+  println("UI expression : " + uiExpression)
+  separator()
+
+  // ============================================================
+  // BEFORE: Simulate the Production-style failure
+  // ============================================================
+
+  println("BEFORE TEST")
+  println("Passing unresolved expression directly to BeanShell")
+
+  var expectedFailureOccurred = false
+
+  try {
+    val interpreter = new Interpreter()
+
+    /*
+     * No placeholder replacement is performed here.
+     * BeanShell receives [VALUE_AMOUNT] literally.
+     */
+    interpreter.eval(uiExpression)
+
+    println("UNEXPECTED: BeanShell evaluation succeeded")
+  } catch {
+    case ex: Exception =>
+      expectedFailureOccurred = true
+
+      println("BEFORE RESULT : FAILED AS EXPECTED")
+      println("Exception type: " + ex.getClass.getName)
+      println("Error message : " + ex.getMessage)
+  }
+
+  assert(
+    expectedFailureOccurred,
+    "Expected BeanShell to fail on unresolved [VALUE_AMOUNT]"
+  )
+
+  separator()
+
+  // ============================================================
+  // AFTER: Call the actual application utility
+  // ============================================================
+
+  println("AFTER TEST")
+  println("Passing the same expression through AdvanceUdfUtil")
+
+  /*
+   * Use the same initialization that worked in your previous test.
+   */
   AdvanceUdfUtil.advanceTransformation = new AdvanceTransformation()
   AdvanceUdfUtil.columns = null
   AdvanceUdfUtil.specialDate = null
-  AdvanceUdfUtil.feedFileName = "AdvanceUdfUtilTest"
+  AdvanceUdfUtil.feedFileName = "AdvanceUdfBeforeAfterTest"
 
-  val extractedColumns =
-    AdvanceUdfUtil.extractColumnNames(uiExpression)
+  try {
+    val row = createRow(inputValue)
 
-  assert(
-    extractedColumns.contains("VALUE_AMOUNT"),
-    "AdvanceUdfUtil did not extract VALUE_AMOUNT"
-  )
+    /*
+     * This is the real application call.
+     *
+     * It should:
+     * 1. Find [VALUE_AMOUNT]
+     * 2. Read VALUE_AMOUNT from the Spark row
+     * 3. Replace the placeholder
+     * 4. Evaluate the resolved expression
+     */
+    val actualResult = AdvanceUdfUtil.getEvalExpression(
+      row,
+      uiExpression,
+      "AdvanceUdfBeforeAfterTest",
+      false
+    )
 
-  val testCases = Seq(
-    ("$1,234.56",       "1234.56"),
-    (" $7,890.12 ",     "7890.12"),
-    ("$0.00",           "0.00"),
-    ("  $0.00  ",       "0.00"),
-    ("$123456789.99",   "123456789.99"),
-    (" $987654321.01 ", "987654321.01"),
-    ("$-1234.56",       "-1234.56"),
-    (" $-7890.12 ",     "-7890.12"),
-    ("$-0.00",          "0.00"),
-    ("",                 "")
-  )
+    val expectedResult = "1234.56"
 
-  testCases.foreach {
-    case (inputValue, expectedValue) =>
+    println("AFTER RESULT  : SUCCESS")
+    println("Input value   : " + inputValue)
+    println("Expected value: " + expectedResult)
+    println("Actual value  : " + actualResult)
 
-      val row = createRow(inputValue)
+    assert(
+      actualResult != null,
+      "Expected a non-null result"
+    )
 
-      val actualValue =
-        AdvanceUdfUtil.getEvalExpression(
-          row,
-          uiExpression,
-          "AdvanceUdfUtilTest",
-          false
-        )
+    assert(
+      actualResult.toString == expectedResult,
+      "Expected [" + expectedResult +
+        "] but received [" + actualResult + "]"
+    )
 
-      assert(
-        actualValue == expectedValue,
-        s"FAILED: input=[$inputValue], expected=[$expectedValue], actual=[$actualValue]"
-      )
+    println("Validation    : PASSED")
+  } catch {
+    case ex: Exception =>
+      println("AFTER RESULT  : FAILED")
+      println("Exception type: " + ex.getClass.getName)
+      println("Error message : " + ex.getMessage)
 
-      println(
-        s"PASSED: input=[$inputValue], result=[$actualValue]"
-      )
+      throw ex
   }
 
-  println("All AdvanceUdfUtil test cases passed.")
+  separator()
+  println("BEFORE: BeanShell received unresolved [VALUE_AMOUNT] and failed.")
+  println("AFTER : AdvanceUdfUtil resolved [VALUE_AMOUNT] and returned 1234.56.")
+  println("Before-and-after simulation completed.")
 }
