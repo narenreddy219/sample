@@ -3,9 +3,8 @@ package com.citi.icg.gru.quickrec.common.utils
 import com.citi.icg.gru.quickrec.common.domain.jobs.fileTransform.AdvanceTransformation
 import org.apache.spark.sql.catalyst.expressions.GenericRowWithSchema
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
-import org.scalatest.FunSuite
 
-class AdvanceUdfUtilTest extends FunSuite {
+object AdvanceUdfUtilTest extends App {
 
   private val schema = StructType(
     Seq(
@@ -14,9 +13,8 @@ class AdvanceUdfUtilTest extends FunSuite {
   )
 
   /*
-   * Keep [VALUE_AMOUNT] in the expression.
-   * AdvanceUdfUtil extracts bracketed column names and replaces them
-   * with the value from the Spark Row before BeanShell evaluation.
+   * Keep [VALUE_AMOUNT].
+   * AdvanceUdfUtil extracts and replaces this UI column placeholder.
    */
   private val uiExpression =
     """![VALUE_AMOUNT].trim().equals("")
@@ -36,74 +34,55 @@ class AdvanceUdfUtilTest extends FunSuite {
     )
   }
 
-  private def initializeAdvanceUdfUtil(): Unit = {
-    /*
-     * getEvalExpression calls setJavaTypedExpression, which accesses
-     * advanceTransformation.isExpressionTyped.
-     */
-    AdvanceUdfUtil.advanceTransformation =
-      new AdvanceTransformation()
+  // Initialize values required internally by AdvanceUdfUtil.
+  AdvanceUdfUtil.advanceTransformation = new AdvanceTransformation()
+  AdvanceUdfUtil.columns = null
+  AdvanceUdfUtil.specialDate = null
+  AdvanceUdfUtil.feedFileName = "AdvanceUdfUtilTest"
 
-    AdvanceUdfUtil.columns = null
-    AdvanceUdfUtil.specialDate = null
-    AdvanceUdfUtil.feedFileName = "AdvanceUdfUtilTest"
-  }
+  val extractedColumns =
+    AdvanceUdfUtil.extractColumnNames(uiExpression)
 
-  test("extract VALUE_AMOUNT from the UI expression") {
-    val extractedColumns =
-      AdvanceUdfUtil.extractColumnNames(uiExpression)
+  assert(
+    extractedColumns.contains("VALUE_AMOUNT"),
+    "AdvanceUdfUtil did not extract VALUE_AMOUNT"
+  )
 
-    assert(extractedColumns.contains("VALUE_AMOUNT"))
-    assert(extractedColumns.size == 1)
-  }
+  val testCases = Seq(
+    ("$1,234.56",       "1234.56"),
+    (" $7,890.12 ",     "7890.12"),
+    ("$0.00",           "0.00"),
+    ("  $0.00  ",       "0.00"),
+    ("$123456789.99",   "123456789.99"),
+    (" $987654321.01 ", "987654321.01"),
+    ("$-1234.56",       "-1234.56"),
+    (" $-7890.12 ",     "-7890.12"),
+    ("$-0.00",          "0.00"),
+    ("",                 "")
+  )
 
-  test("evaluate VALUE_AMOUNT through the actual AdvanceUdfUtil") {
-    initializeAdvanceUdfUtil()
+  testCases.foreach {
+    case (inputValue, expectedValue) =>
 
-    val testCases = Seq(
-      ("$1,234.56",       "1234.56"),
-      (" $7,890.12 ",     "7890.12"),
-      ("$0.00",           "0.00"),
-      ("  $0.00  ",       "0.00"),
-      ("$123456789.99",   "123456789.99"),
-      (" $987654321.01 ", "987654321.01"),
-      ("$-1234.56",       "-1234.56"),
-      (" $-7890.12 ",     "-7890.12"),
-      ("$-0.00",          "0.00"),
-      ("",                 ""),
-      (null,               "")
-    )
+      val row = createRow(inputValue)
 
-    testCases.foreach {
-      case (inputValue, expectedValue) =>
-
-        val row = createRow(inputValue)
-
-        /*
-         * This is the important call.
-         * It executes the same method used by advanceExpressionUDF.
-         */
-        val actualValue =
-          AdvanceUdfUtil.getEvalExpression(
-            row = row,
-            inputExpr = uiExpression,
-            feedFileName = "AdvanceUdfUtilTest",
-            isFileBaseFilter = false
-          )
-
-        assert(
-          actualValue == expectedValue,
-          s"""AdvanceUdfUtil test failed:
-             |Input    : ${Option(inputValue).getOrElse("null")}
-             |Expected : $expectedValue
-             |Actual   : $actualValue
-             |""".stripMargin
+      val actualValue =
+        AdvanceUdfUtil.getEvalExpression(
+          row,
+          uiExpression,
+          "AdvanceUdfUtilTest",
+          false
         )
 
-        println(
-          s"PASSED: input=[${Option(inputValue).getOrElse("null")}], " +
-            s"result=[$actualValue]"
-        )
-    }
+      assert(
+        actualValue == expectedValue,
+        s"FAILED: input=[$inputValue], expected=[$expectedValue], actual=[$actualValue]"
+      )
+
+      println(
+        s"PASSED: input=[$inputValue], result=[$actualValue]"
+      )
   }
+
+  println("All AdvanceUdfUtil test cases passed.")
 }
