@@ -1,0 +1,66 @@
+Analyze Jira ticket [JIRA-KEY] and calculate the acknowledgement time and resolution time specifically for our team, [TEAM NAME].
+
+Review the complete Jira history, including:
+- Ticket creation timestamp
+- Assignee changes
+- Status transitions
+- Comments and their authors
+- Resolution timestamp
+- Reopen events, if any
+
+Definitions:
+
+1. Acknowledgement time
+The time between ticket creation and the first meaningful action from our team.
+
+Count any of the following as acknowledgement:
+- A team member posts a meaningful comment
+- A team member accepts or assigns the ticket
+- A team member moves the ticket into an active status such as Acknowledged, Assigned, In Progress, Investigation, or equivalent
+
+Do not count:
+- Automated notifications
+- Bot-generated comments
+- System-generated history updates
+- Comments from the reporter, requester, or another support team
+- Assignment to a queue without any action by our team
+
+2. Resolution time
+The time between ticket creation and the first valid transition to Resolved, Closed, Done, or the equivalent final status.
+
+If the ticket was reopened:
+- Show each resolution cycle separately
+- Calculate the final resolution time up to the latest valid closure
+- Clearly identify time spent in reopened status
+
+3. Our team
+Only consider actions performed by:
+[ADD TEAM MEMBERS, JIRA GROUP, OR SUPPORT QUEUE]
+
+Provide the results in this format:
+
+| Metric | Start timestamp | End timestamp | Duration | Evidence |
+|---|---|---|---|---|
+| First acknowledgement | Ticket created | First qualifying team action | Hours and minutes | Person, action/comment, and timestamp |
+| First resolution | Ticket created | First resolved transition | Days, hours, and minutes | Status transition and timestamp |
+| Final resolution | Ticket created | Latest valid closure | Days, hours, and minutes | Status transition and timestamp |
+
+Also provide:
+- Calendar-time duration
+- Business-hours duration using [TIME ZONE], [WORKING HOURS], Monday–Friday, excluding weekends and configured holidays
+- Current ticket status
+- Current assignee
+- A short chronological timeline of the important actions
+- Whether the acknowledgement and resolution SLA were met, using these targets:
+  - Acknowledgement SLA: [X HOURS]
+  - Resolution SLA: [Y HOURS/DAYS]
+
+Important rules:
+- Use exact Jira timestamps and history as evidence.
+- Do not estimate or assume missing information.
+- Clearly state “Cannot determine from Jira history” if evidence is unavailable.
+- Separate our team’s response from actions taken by other teams.
+- If ownership was transferred to our team later, show both:
+  1. Duration from ticket creation
+  2. Duration from the time our team received ownership
+- Include a direct link to the Jira ticket.
