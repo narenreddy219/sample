@@ -1,61 +1,157 @@
+package com.citi.icg.gru.quickrec.common.utils
+
 import bsh.Interpreter
-import java.math.BigDecimal
 
-object AdvancedCalculationTest extends App {
+/**
+ * Regression test for the ARRANGEMENT_DESC BeanShell lexical error.
+ *
+ * Production-style input:
+ *   C6400715,M\S P.SARAT KUMAR
+ *
+ * Run this object directly from IntelliJ.
+ */
+object AdvancedCalculationSpecialCharacterTest extends App {
 
-  val uiExpression =
-    """VALUE_AMOUNT == null || VALUE_AMOUNT.trim().equals("")
-      |? null
-      |: new java.math.BigDecimal(
-      |    VALUE_AMOUNT.replace("$", "").replace(",", "").trim()
-      |  ).setScale(2, java.math.RoundingMode.HALF_UP)""".stripMargin
+  private val placeholder = "[ARRANGEMENT_DESC]"
 
-  val testCases = Seq(
-    ("$1,234.56",       "1234.56"),
-    (" $7,890.12 ",     "7890.12"),
-    ("$0.00",           "0.00"),
-    ("  $0.00  ",       "0.00"),
-    ("$123456789.99",   "123456789.99"),
-    (" $987654321.01 ", "987654321.01"),
-    ("$-1234.56",       "-1234.56"),
-    (" $-7890.12 ",     "-7890.12"),
-    ("$-0.00",          "0.00"),
-    ("",                 null),
-    (null,               null)
-  )
+  // The Scala source contains \\ so the runtime value contains one backslash.
+  private val sourceValue = "C6400715,M\\S P.SARAT KUMAR"
 
-  testCases.foreach {
-    case (inputValue, expectedValue) =>
-      try {
-        // Create and bind for every test case
-        val interpreter = new Interpreter()
-        interpreter.set("VALUE_AMOUNT", inputValue)
+  // Exact type of advanced calculation configured for ARRANGEMENT_DESC.
+  private val configuredExpression =
+    """[ARRANGEMENT_DESC].replace("\"", "").replace("\\", "")"""
 
-        // Evaluate directly—no [VALUE_AMOUNT] replacement
-        val result = interpreter.eval(uiExpression)
-
-        val actualValue =
-          Option(result)
-            .map(_.asInstanceOf[BigDecimal].toPlainString)
-            .orNull
-
-        assert(
-          actualValue == expectedValue,
-          s"FAILED: input=[$inputValue], expected=[$expectedValue], actual=[$actualValue]"
-        )
-
-        println(
-          s"PASSED: input=[$inputValue], result=[$actualValue]"
-        )
-
-      } catch {
-        case ex: Exception =>
-          println(
-            s"FAILED: input=[$inputValue], error=${ex.getMessage}"
-          )
-          throw ex
-      }
+  /**
+   * Reproduces the current behavior: the raw value is surrounded with quotes
+   * but its special characters are not escaped.
+   */
+  private def unsafeBeanShellStringLiteral(value: String): String = {
+    "\"" + value + "\""
   }
 
-  println("All advanced-calculation test cases passed.")
+  /**
+   * Converts a row value into a valid BeanShell/Java string literal.
+   *
+   * The order is important: escape the existing backslashes first, and then
+   * escape the other characters.
+   */
+  private def safeBeanShellStringLiteral(value: String): String = {
+    if (value == null) {
+      "null"
+    } else {
+      val escapedValue = value
+        .replace("\\", "\\\\")
+        .replace("\"", "\\\"")
+        .replace("\b", "\\b")
+        .replace("\f", "\\f")
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+        .replace("\t", "\\t")
+
+      "\"" + escapedValue + "\""
+    }
+  }
+
+  private def resolveExpression(beanShellLiteral: String): String = {
+    configuredExpression.replace(placeholder, beanShellLiteral)
+  }
+
+  private def errorMessages(error: Throwable): String = {
+    val result = new StringBuilder
+    var current = error
+
+    while (current != null) {
+      if (current.getMessage != null) {
+        if (result.nonEmpty) {
+          result.append(" | ")
+        }
+        result.append(current.getMessage)
+      }
+      current = current.getCause
+    }
+
+    result.toString()
+  }
+
+  println("Source value          : " + sourceValue)
+  println("Configured expression : " + configuredExpression)
+  println("------------------------------------------------------------")
+
+  // ------------------------------------------------------------------------
+  // TEST 1 - BEFORE: reproduce the Production lexical error
+  // ------------------------------------------------------------------------
+
+  val unsafeExpression =
+    resolveExpression(unsafeBeanShellStringLiteral(sourceValue))
+
+  println("TEST 1 - BEFORE")
+  println("Generated expression  : " + unsafeExpression)
+
+  var lexicalErrorReproduced = false
+
+  try {
+    new Interpreter().eval(unsafeExpression)
+  } catch {
+    case error: Throwable =>
+      lexicalErrorReproduced = true
+      println("Result                : FAILED AS EXPECTED")
+      println("BeanShell error       : " + errorMessages(error))
+  }
+
+  assert(
+    lexicalErrorReproduced,
+    "Expected BeanShell to fail when the raw backslash was not escaped"
+  )
+
+  println("------------------------------------------------------------")
+
+  // ------------------------------------------------------------------------
+  // TEST 2 - AFTER: validate the proposed escaping fix
+  // ------------------------------------------------------------------------
+
+  val safeExpression =
+    resolveExpression(safeBeanShellStringLiteral(sourceValue))
+
+  println("TEST 2 - AFTER")
+  println("Generated expression  : " + safeExpression)
+
+  val actualResult = new Interpreter().eval(safeExpression)
+  val expectedResult = "C6400715,MS P.SARAT KUMAR"
+
+  println("Result                : SUCCESS")
+  println("Expected              : " + expectedResult)
+  println("Actual                : " + actualResult)
+
+  assert(
+    actualResult != null && actualResult.toString == expectedResult,
+    "Expected [" + expectedResult + "] but received [" + actualResult + "]"
+  )
+
+  println("------------------------------------------------------------")
+
+  // ------------------------------------------------------------------------
+  // TEST 3 - REGRESSION: embedded quotation mark and backslash
+  // ------------------------------------------------------------------------
+
+  val quoteAndSlashValue = "ABC \"TEST\"\\VALUE"
+  val quoteAndSlashExpression =
+    resolveExpression(safeBeanShellStringLiteral(quoteAndSlashValue))
+  val quoteAndSlashResult =
+    new Interpreter().eval(quoteAndSlashExpression)
+  val quoteAndSlashExpected = "ABC TESTVALUE"
+
+  println("TEST 3 - QUOTE AND BACKSLASH")
+  println("Source value          : " + quoteAndSlashValue)
+  println("Generated expression  : " + quoteAndSlashExpression)
+  println("Expected              : " + quoteAndSlashExpected)
+  println("Actual                : " + quoteAndSlashResult)
+
+  assert(
+    quoteAndSlashResult != null &&
+      quoteAndSlashResult.toString == quoteAndSlashExpected,
+    "Embedded quote/backslash regression test failed"
+  )
+
+  println("------------------------------------------------------------")
+  println("All special-character BeanShell tests passed.")
 }
