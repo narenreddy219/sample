@@ -1,0 +1,179 @@
+Review all uploaded files and implement the Avro integration by following the existing execution flow. Do not redesign the application or create a separate processing pipeline.
+
+Required execution flow:
+
+DataConnector
+  -> KafkaProcessor
+  -> resolve the SourceConnector configuration
+  -> check the connector’s FILE_FORMAT
+  -> if FILE_FORMAT is "Avro", call AvroProcessingUtility
+  -> decode the original Kafka binary value
+  -> flatten the decoded Avro data
+  -> return the processed DataFrame to KafkaProcessor
+  -> continue through the remaining existing KafkaProcessor logic
+  -> use the existing HDFSWrite/output flow
+  -> complete the normal KafkaProcessor execution
+
+Instructions:
+
+1. Trace the actual code from DataConnector into KafkaProcessor using the real uploaded methods and classes.
+
+2. Identify how KafkaProcessor obtains the SourceConnector and where it gets:
+   - connector name or connector ID
+   - recon ID
+   - FILE_FORMAT
+   - topic
+   - bootstrap servers
+   - Schema Registry URL
+   - starting offsets
+   - authentication configuration
+   - HDFS/output path
+
+3. Confirm whether these values come from:
+   - SourceConnector
+   - TableQueries
+   - HelperFunctions
+   - source_connector_uat.conf
+   - Oracle metadata
+   - environment variables
+   - method parameters
+
+4. The Avro decision must be based on the selected SourceConnector’s FILE_FORMAT:
+
+   val isAvro =
+     Option(fileFormat)
+       .exists(_.trim.equalsIgnoreCase("Avro"))
+
+5. Do not default null, empty, or unknown FILE_FORMAT values to Avro.
+
+6. Preserve the Kafka `value` column as binary before Avro decoding. Do not cast the Kafka value to String before passing it to AvroProcessingUtility.
+
+7. When FILE_FORMAT is Avro, KafkaProcessor must call the existing AvroProcessingUtility using its real public method and parameters.
+
+8. AvroProcessingUtility should:
+   - accept the Kafka DataFrame or binary Kafka value expected by its current method
+   - read the Confluent wire-format schema ID if applicable
+   - remove the 5-byte Confluent header if required
+   - retrieve or use the correct Avro schema
+   - decode the Avro payload
+   - recursively flatten nested structs
+   - handle arrays and maps according to the utility’s existing design
+   - return the decoded and flattened DataFrame to KafkaProcessor
+
+9. AvroProcessingUtility must not terminate the pipeline after decoding or write through a new independent path unless that is already its intended responsibility.
+
+10. After AvroProcessingUtility returns the flattened DataFrame, KafkaProcessor must continue through its existing downstream operations until the end. Preserve applicable existing logic such as:
+    - Kafka metadata columns
+    - record-count handling
+    - validations
+    - partition or offset processing
+    - audit updates
+    - output-path construction
+    - HDFS writing
+    - success/failure status handling
+    - exception handling and cleanup
+
+11. Do not return prematurely from KafkaProcessor after calling AvroProcessingUtility.
+
+12. Pass the flattened Avro DataFrame into the same downstream stage that normally receives the processed Kafka DataFrame, unless the existing code requires a small Avro-specific adaptation.
+
+13. For a non-Avro FILE_FORMAT, execute the current KafkaProcessor path without changing its existing behavior.
+
+The branching should conceptually work like this:
+
+val processedDF =
+  if (isAvro) {
+    AvroProcessingUtility.decodeAndFlatten(
+      kafkaDF,
+      schemaRegistryUrl
+    )
+  } else {
+    existingNonAvroProcessing(kafkaDF)
+  }
+
+// Both branches must rejoin here.
+continueExistingKafkaProcessorFlow(processedDF)
+
+Use the actual uploaded method names and signatures. Do not copy this conceptual code if those methods do not exist.
+
+14. Reuse:
+    - existing SourceConnector resolution
+    - existing TableQueries
+    - existing HelperFunctions
+    - existing AvroProcessingUtility
+    - existing HDFSWrite
+    - existing SparkSession
+    - existing Kafka reader
+    - existing credential-loading mechanism
+
+15. Do not create:
+    - another Kafka consumer
+    - another SparkSession
+    - another configuration parser
+    - duplicate Avro decoding logic inside KafkaProcessor
+    - duplicate flattening logic
+    - a separate HDFS writer
+    - hardcoded connector names or recon IDs
+
+16. Preserve valid HDFS URIs. Do not convert:
+
+   hdfs://nameservice/path
+
+   into:
+
+   hdfs:/nameservice/path
+
+17. Do not hardcode or print usernames, passwords, JAAS configuration, keystore passwords, truststore passwords, or tokens.
+
+Before changing the code, show me:
+
+A. The current call chain using exact class and method names:
+
+DataConnector
+  -> KafkaProcessor
+  -> SourceConnector/config lookup
+  -> current processing
+  -> HDFSWrite
+  -> completion
+
+B. The proposed call chain:
+
+DataConnector
+  -> KafkaProcessor
+  -> SourceConnector FILE_FORMAT check
+  -> AvroProcessingUtility when Avro
+  -> return flattened DataFrame
+  -> resume KafkaProcessor
+  -> existing HDFSWrite
+  -> completion
+
+C. The precise point where KafkaProcessor currently casts or transforms Kafka `value`.
+
+D. The precise line/method where the Avro branch should be inserted.
+
+E. The exact point where the Avro and non-Avro branches will rejoin.
+
+F. A table mapping every required value to its real source and code field.
+
+G. Any incompatible method signatures or missing files. Do not invent missing methods.
+
+After the analysis, provide:
+
+1. The complete updated KafkaProcessor.scala.
+2. Only the necessary changes to AvroProcessingUtility.scala.
+3. Only required supporting changes to DataConnector, SourceConnector, HDFSWrite, HelperFunctions, or TableQueries.
+4. Exact insertion and replacement locations.
+5. A before-and-after execution-flow explanation.
+6. A test where FILE_FORMAT = "Avro" proving:
+   - AvroProcessingUtility is called
+   - binary value is decoded
+   - data is flattened
+   - the DataFrame returns to KafkaProcessor
+   - the remaining KafkaProcessor flow executes
+   - the existing output writer is reached
+7. A non-Avro regression test proving the existing path remains unchanged.
+8. A failure test for missing Schema Registry URL when Avro is selected.
+9. A test confirming a valid `hdfs://` URI is preserved.
+10. A test confirming secrets are masked in logs.
+
+Make the smallest safe code change. First inspect the uploaded implementation and use its real classes, method signatures, return types, and configuration keys.
