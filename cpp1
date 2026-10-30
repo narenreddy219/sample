@@ -1,0 +1,412 @@
+# CPP — Feed-Level Spark Transformation Timeout Implementation
+
+## Role
+
+Act as a Senior Scala, Apache Spark, and Distributed Systems Engineer working on an existing enterprise reconciliation application.
+
+You have access to the CPP source code through IntelliJ.
+
+Your responsibility is to implement, test, and validate **feed-level Spark transformation timeout handling** while preserving existing application behavior.
+
+This is an implementation task, not just a design exercise.
+
+Do not deploy or merge changes.
+
+## 1. Existing architecture
+
+The Core PreProcessor (CPP) application runs on Apache Spark using Scala.
+
+Current execution behavior:
+
+- One CPP Spark application processes multiple input feeds.
+- Input files are available in the configured CPP processing path on HDFS.
+- The Spark driver uses a Scala ForkJoin pool.
+- The configured parallelism is 10 concurrent feed-processing tasks.
+- Each worker independently processes a feed.
+- When a worker completes, it becomes available for another queued feed.
+- Different feeds can submit Spark actions concurrently.
+- All feeds share the same SparkContext and Spark executor resources.
+- Current source investigation found no implementation of `setJobGroup`, `cancelJobGroup`, or `clearJobGroup`.
+- Existing audit logging, file archive, and failure-handling mechanisms are already implemented.
+
+Do not introduce another Spark application or replace the ForkJoin execution model.
+
+## 2. Business requirement
+
+Introduce a **configurable 30-minute timeout for the transformation phase of each feed**.
+
+The timeout must NOT apply to the entire CPP execution lifecycle.
+
+For example:
+
+| Operation | Duration | Timeout applicability |
+|---|---|---|
+| Read and initialize feed | 5 minutes | Excluded |
+| Execute transformation | 28 minutes | Included |
+| Write output | 2 minutes | Excluded, where separately measurable |
+| Archive and update audit | 1 minute | Excluded |
+
+This feed must complete successfully because its transformation took only 28 minutes.
+
+If the transformation itself reaches 30 minutes without completing, CPP must stop the associated Spark work and execute the existing failure-handling lifecycle.
+
+The requirement applies to the existing CPP transformation path. Do not change CPP-versus-AI gating logic or any unreleased transformation-count feature.
+
+## 3. Source code inspection
+
+Before modifying code:
+
+1. Identify the ForkJoin pool creation and task-submission classes.
+2. Identify the method where an individual feed is picked up.
+3. Identify the transformation entry and exit methods.
+4. Identify Spark transformations and actions invoked by each feed.
+5. Identify existing exception handling and audit updates.
+6. Identify existing archive, partial-output cleanup, and rerun behavior.
+7. Identify the Spark and Scala versions from the Maven configuration.
+8. Inspect any shared mutable objects, thread-local properties, and asynchronous execution inside the transformation flow.
+
+Use the existing project conventions and utilities wherever possible.
+
+Do not invent class names, audit tables, or configuration keys without checking the actual source.
+
+## 4. Implement feed-specific Spark Job Groups
+
+Each transformation execution must have a unique Spark job group.
+
+Use a group identifier containing the relevant feed/reconciliation identity and a unique execution-attempt identifier.
+
+Illustrative identifier:
+
+`CPP_RECON123_FEED9_ATTEMPT456`
+
+Requirements:
+
+- Set the Spark job group on the driver-side worker thread that submits the Spark actions.
+- Associate every Spark action belonging to that transformation with the correct group.
+- If the transformation submits work from additional threads, explicitly verify and preserve the correct Spark local-property context.
+- Ensure concurrently running feeds use distinct groups.
+- Do not change the shared SparkContext or scheduler-pool configuration unnecessarily.
+- Clear the job group in a `finally` block to prevent property leakage when ForkJoin threads are reused.
+- Preserve existing exception handling.
+
+Use the supported Spark APIs for the project's installed Spark version.
+
+## 5. Implement transformation-level timeout
+
+Introduce a configurable setting for the timeout.
+
+Suggested configuration name:
+
+`cpp.transformation.timeout.minutes=30`
+
+Follow the project's existing configuration mechanism.
+
+The timeout must start immediately before the transformation phase begins.
+
+Requirements:
+
+- Each feed has an independent timeout.
+- Measure elapsed time using a monotonic clock.
+- A timeout for Feed 9 must not affect Feed 1, Feed 2, or any other feed.
+- Cancel the timeout registration when transformation completes.
+- Avoid races between successful completion and timeout triggering.
+- Ensure timeout resources are cleaned up.
+- Do not create one permanent monitoring thread for every input file.
+- Reuse an existing scheduling facility if suitable, or introduce a small, controlled timeout scheduler.
+- Do not replace the existing ForkJoin pool.
+
+Important: Spark transformations may be lazy. Identify which Spark actions actually materialize the transformation. Do not claim a 30-minute transformation guarantee if the computation is deferred until a later write action.
+
+Where transformation and output writing cannot be separated accurately, document the limitation and implement the safest measurable boundary without changing the existing business behavior.
+
+## 6. Cancel the actual Spark execution
+
+At the 30-minute transformation threshold:
+
+1. Mark the execution attempt as timed out internally.
+2. Cancel the Spark job group associated with that feed.
+3. Prevent additional Spark actions from being submitted for the timed-out attempt.
+4. Allow the driver-side Spark action to unwind through cancellation or exception handling.
+5. Confirm that relevant Spark execution has reached a terminal state.
+6. Prevent the timed-out attempt from continuing into normal success handling.
+
+Use `SparkContext.cancelJobGroup(groupId)` as the primary Spark cancellation mechanism.
+
+Do not rely only on:
+
+- `ForkJoinTask.cancel()`
+- `Future.cancel()`
+- Setting a FAILED flag
+- Updating an audit record
+- Interrupting the driver thread
+
+These alone do not guarantee termination of the distributed Spark execution.
+
+Do not call `SparkContext.stop()` or kill the entire CPP application.
+
+### HDFS cancellation caveat
+
+The CPP environment uses HDFS.
+
+Evaluate the Spark `interruptOnCancel` setting against the installed Spark version and current HDFS behavior.
+
+Do not blindly enable executor-thread interruption. Spark documents potential issues with interrupting certain HDFS operations.
+
+Make this behavior configurable if required and explain the trade-offs.
+
+If the underlying Spark execution does not stop promptly, report cancellation as incomplete rather than claiming the feed has safely terminated.
+
+## 7. Preserve ForkJoin worker availability
+
+Example:
+
+100 feeds are waiting for processing.
+
+CPP processes 10 concurrently.
+
+Feed 9 remains in transformation for 30 minutes while other feeds complete normally.
+
+Expected behavior:
+
+- Feed 9 reaches its timeout.
+- CPP requests cancellation of Feed 9's Spark job group.
+- Other feeds continue unaffected.
+- Feed 9's execution is terminated and exits its feed-processing method.
+- Its worker becomes available for the next queued feed.
+- CPP continues processing the remaining files.
+
+Do not forcefully terminate or recreate ForkJoin worker threads.
+
+Do not count a worker as available merely because its task was marked cancelled while execution remains blocked.
+
+If cancellation cannot complete, retain the true running/cancellation state and surface it for operational intervention.
+
+## 8. Existing audit handling
+
+Reuse the existing CPP audit framework.
+
+When a transformation times out:
+
+- Record the feed/reconciliation identity.
+- Record the execution attempt.
+- Set the appropriate existing FAILED audit status.
+- Record the transformation duration.
+- Record the timeout threshold.
+- Record a specific timeout reason.
+- Preserve the existing audit schema and conventions.
+
+Suggested audit message:
+
+"CPP transformation exceeded the configured 30-minute execution threshold. Review and optimize the transformation logic or evaluate the AI SQL flow for improved performance."
+
+The failure classification must clearly distinguish TIMEOUT from ordinary transformation errors.
+
+Do not claim the transformation is inefficient solely because it timed out.
+
+If cancellation cannot be confirmed, do not record a misleading terminal state. Follow the existing audit model or report the missing state capability for review.
+
+## 9. Partial-output cleanup and file handling
+
+Inspect the current CPP file-processing and failure-handling lifecycle.
+
+When a transformation times out:
+
+- Ensure the original Spark execution is no longer writing output before deleting partial results.
+- Remove only the partial output associated with that specific feed execution attempt.
+- Never remove output belonging to other feeds.
+- Reuse existing cleanup mechanisms.
+- Prevent concurrent cleanup and writes for the same attempt.
+- Follow the existing file-movement, archive, and failed-feed recovery conventions.
+- Ensure the input is available for controlled reprocessing according to the existing process.
+- Do not immediately and repeatedly requeue a timed-out feed without an approved retry policy.
+- Prevent duplicate processing when the same feed is rerun.
+
+Do not change the current archive or processing-path semantics without identifying and reporting the reason.
+
+If a partial HDFS write is not safely removable, report this limitation instead of performing unsafe deletion.
+
+## 10. Concurrency and race conditions
+
+Explicitly address the following:
+
+**Scenario A — Normal completion**
+
+The transformation finishes in 20 minutes.
+
+Expected: Success, no cancellation.
+
+**Scenario B — Transformation timeout**
+
+Feed 9 exceeds 30 minutes.
+
+Expected: Cancel only Feed 9, perform safe failure handling, and continue processing other feeds.
+
+**Scenario C — Completion and timeout occur simultaneously**
+
+At the timeout boundary, transformation completion and cancellation race.
+
+Expected: Exactly one terminal outcome; no contradictory SUCCESS and FAILED audit records.
+
+**Scenario D — Spark cancellation is delayed**
+
+The timeout is triggered, but executor tasks continue running.
+
+Expected: Do not archive, clean up, or requeue while the previous attempt may still modify output.
+
+**Scenario E — Multiple Spark jobs for one feed**
+
+A transformation invokes multiple Spark actions.
+
+Expected: All relevant jobs are associated with the same feed-specific group; no additional work is submitted after timeout.
+
+**Scenario F — Worker reuse**
+
+A worker finishes its previous feed and begins the next.
+
+Expected: No stale job group, timeout, or cancellation state affects the new feed.
+
+**Scenario G — Other feeds remain active**
+
+Feed 9 times out while nine other feeds process normally.
+
+Expected: No unrelated Spark jobs are cancelled.
+
+## 11. Testing requirements
+
+Implement automated tests using existing test frameworks and project patterns.
+
+### Unit tests
+
+- Timeout duration configuration
+- Unique feed job group identification
+- Timeout registration and cancellation
+- Normal transformation completion
+- Timeout-triggered failure
+- Exactly-once terminal status transition
+- Cleanup of thread-local Spark properties
+- Safe handling of cancellation exceptions
+
+### Spark integration tests
+
+Use local Spark execution if the current project supports it.
+
+Test three concurrent feeds:
+
+1. Feed A — completes normally.
+2. Feed B — deliberately exceeds a short test timeout.
+3. Feed C — remains active while Feed B is cancelled.
+
+Expected results:
+
+- Feed B is cancelled.
+- Feed A succeeds.
+- Feed C is unaffected.
+- No jobs from Feed B continue running after cancellation is confirmed.
+- The worker processing Feed B eventually becomes reusable.
+- Audit results reflect the actual outcome.
+- Partial outputs from Feed B are safely cleaned up.
+
+Use a configurable short timeout for automated testing, not a real 30-minute wait.
+
+Also test a successful feed that completes transformation before the timeout but spends additional time in output writing.
+
+### Existing functionality regression
+
+Verify that the changes do not break:
+
+- Normal feed transformation
+- ForkJoin parallelism
+- Existing failure handling
+- Audit updates
+- Input archive behavior
+- Existing CPP-versus-AI flow selection
+- Subsequent feed scheduling
+- Safe rerun behavior
+
+Do not simulate Spark cancellation merely by changing an in-memory status flag. Include an integration test demonstrating cancellation of actual Spark work.
+
+## 12. Logging and runtime evidence
+
+Add structured, readable application logs for:
+
+- Feed pickup
+- Transformation start
+- Spark job group ID
+- Transformation completion
+- Timeout detection
+- Cancellation request
+- Cancellation outcome
+- Partial-output cleanup
+- Audit status
+- Final feed outcome
+- Worker task completion
+
+Use existing logging conventions.
+
+Avoid excessive logs and sensitive feed data.
+
+The logs must make it possible to trace one timed-out feed without confusing it with other concurrent feeds.
+
+## 13. Implementation constraints
+
+- Work in a local feature branch.
+- Do not change unrelated application functionality.
+- Do not alter executor memory, driver memory, dynamic allocation, or ForkJoin parallelism unless there is a demonstrated dependency.
+- Do not modify the unreleased transformation-count feature.
+- Do not modify CPP-versus-AI gating.
+- Do not introduce unnecessary dependencies or architectural frameworks.
+- Follow existing Scala and Maven code standards.
+- Do not silently swallow cancellation exceptions.
+- Do not deploy or merge.
+- Do not mark tests as passed unless they actually ran successfully.
+- Keep production behavior unchanged until timeout functionality is explicitly enabled through configuration, where the existing configuration model permits.
+
+## 14. Deliverables
+
+After implementation, provide:
+
+1. Existing code execution flow and identified methods.
+2. List of modified files with class names and line numbers.
+3. Summary of implementation changes.
+4. Explanation of how Feed 9's Spark jobs are identified and cancelled.
+5. Explanation of how the ForkJoin worker becomes available.
+6. Timeout configuration details.
+7. Existing audit and archive integration changes.
+8. Unit-test results.
+9. Spark integration-test results.
+10. Remaining caveats, including cancellation limitations and HDFS risks.
+11. Instructions for validating the changes in UAT.
+
+Provide actual build and test output where available.
+
+## 15. Implementation approach
+
+Execute in this order:
+
+**Step 1 — Source analysis**
+
+Identify the relevant entry points, transformation actions, SparkContext, ForkJoin tasks, and audit/archive mechanisms.
+
+**Step 2 — Minimal implementation**
+
+Introduce unique feed job groups and timeout monitoring around transformation execution.
+
+**Step 3 — Cancellation handling**
+
+Ensure cancellation propagates correctly, prevents further work, and allows the feed-processing task to exit.
+
+**Step 4 — Failure lifecycle**
+
+Integrate verified cancellation with existing audit, cleanup, and retry handling.
+
+**Step 5 — Automated testing**
+
+Run unit tests, integration tests, and regression tests.
+
+**Step 6 — Report**
+
+Summarize all changes, evidence, unresolved risks, and UAT validation steps.
+
+Start by analyzing the actual CPP codebase, then implement the feature using existing patterns. Do not stop at a design proposal.
+
+**Success criterion: One timed-out feed stops its Spark processing without interrupting the other concurrent feeds, and CPP continues processing the remaining queue safely.**
