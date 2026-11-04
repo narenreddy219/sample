@@ -1,0 +1,224 @@
+# Prompt: OneRec 2.0 — File Watcher Modernization and AWS Migration Architecture Proposal
+
+Act as a **Senior AWS Migration Architect, Databricks Solution Architect, and Enterprise Data Engineering Lead**.
+
+Prepare a professional, technically detailed architecture proposal for the **OneRec 2.0 migration from on-premises Hadoop/HDFS to AWS S3 and Databricks**.
+
+The proposal will be presented to application architects, engineering leadership, the Gateway team, Data Governance, Cloud Infrastructure, and Operations.
+
+Use clear enterprise architecture terminology, practical implementation considerations, and a professional technical writing style. The document should distinguish the **strategic target architecture** from the **interim proof-of-concept (POC) architecture**.
+
+## 1. Background and Current Architecture
+
+OneRec is an enterprise reconciliation platform currently running on-premises.
+
+The existing processing flow is:
+
+**Source Systems → Existing File Watcher → HDFS Landing → DataMerger → CorePreProcessor (CPP) → ReconEngine**
+
+The existing File Watcher receives source files and delivers them to HDFS.
+
+The Merger processes files and maintains archive locations containing successful and failed processing outcomes.
+
+As part of the AWS modernization initiative, OneRec is migrating processing to AWS S3 and Databricks while retaining Scala and Apache Spark for the core reconciliation workloads.
+
+We need a solution that allows the same source files to become available to the AWS Merger without disrupting existing on-premises processing.
+
+## 2. Architecture Option 1 — Strategic Target Design: Extend Existing File Watcher Using OneOps API
+
+**Recommended long-term architecture.**
+
+Instead of introducing Spark Structured Streaming solely for file discovery and transfer, extend the existing File Watcher and its integration with the existing OneOps API.
+
+Proposed flow:
+
+**Source Systems → Existing File Watcher → Parallel Delivery**
+
+- Path A: Existing HDFS landing directory → Existing on-premises Merger
+- Path B: Approved Gateway/DX transfer → AWS S3 landing → AWS Merger
+
+The OneOps API will act as the configuration and operational control interface.
+
+The File Watcher will remain a lightweight service rather than becoming a Spark application.
+
+### Design requirements
+
+1. Preserve the existing HDFS delivery behavior.
+2. Introduce an optional AWS S3 delivery branch.
+3. Use the existing OneOps API and extend its configuration parameters where required.
+4. Support independent delivery status for HDFS and AWS.
+5. Avoid making AWS delivery failures block the existing on-premises pipeline.
+6. Support new and modified file detection.
+7. Implement retry, checkpointing, idempotency, and transfer verification.
+8. Integrate with the approved Gateway/DX transfer mechanism.
+9. Include mandatory LVID, GOC, Country Code, and relevant governance metadata.
+10. Support a configuration flag to enable or disable AWS delivery for individual source feeds.
+11. Maintain audit and traceability from original source file to HDFS and S3.
+12. Ensure that the AWS Merger processes only verified and business-ready files.
+
+### OneOps API configuration
+
+Propose a backward-compatible parameter design covering:
+
+- Watcher identification and source configuration
+- HDFS delivery enablement
+- AWS delivery enablement
+- Approved S3 destination identifier
+- File pattern and eligibility rules
+- File polling and stability intervals
+- Gateway/DX route configuration
+- LVID, GOC, and Country Code
+- Retry and timeout configuration
+- Transfer concurrency
+- File verification and checksum options
+- Operational status, pause/resume, and replay
+- Configuration version and audit metadata
+
+Do not assume new API endpoints already exist. Explain how to extend the current OneOps API after reviewing its existing contract.
+
+## 3. Architecture Option 2 — Interim POC: HDFS Export to AWS S3
+
+**Recommended short-term approach for validating AWS connectivity and ingestion without changing the existing production File Watcher.**
+
+For the POC, we do not want to implement the complete OneOps API enhancement immediately.
+
+Instead, use the existing HDFS files as the source and introduce a lightweight file export and transfer pipeline.
+
+Proposed flow:
+
+**HDFS Landing / Archive → HDFS Export Process → Linux Landing Zone → Lightweight File Watcher / Transfer Worker → Gateway/DX → AWS S3 → AWS Merger**
+
+### Design requirements
+
+1. Identify the approved HDFS source location.
+2. Export or copy eligible source files from HDFS into a dedicated Linux landing directory.
+3. Preserve original filenames, source metadata, and file integrity.
+4. Ensure files are completely exported before they become eligible for transfer.
+5. Use temporary filenames followed by atomic rename where supported.
+6. Detect newly exported files using lightweight polling or filesystem notifications.
+7. Transfer files to S3 through the approved Gateway/DX mechanism.
+8. Validate transfer completion and file integrity.
+9. Maintain basic checkpointing to prevent unnecessary duplicate transfers.
+10. Support controlled retries and recovery.
+11. Keep the POC independent of the existing production Merger.
+12. Validate AWS Merger execution using the transferred source files.
+
+### Spark Structured Streaming consideration
+
+Evaluate whether Spark Structured Streaming with micro-batches could be used to discover or process files from HDFS.
+
+However, do not assume Spark Structured Streaming is required or the preferred mechanism for copying whole files.
+
+Clearly explain:
+
+- Whether Spark Structured Streaming is technically feasible.
+- Its limitations for detecting modified or previously processed files.
+- Why a lightweight Scala/Hadoop FileSystem API export service may be simpler.
+- When Spark would be justified, such as distributed file transformation or large-scale content processing.
+- The difference between micro-batch scheduling and Spark Structured Streaming.
+
+For the POC, prioritize simplicity, low infrastructure overhead, and rapid validation.
+
+## 4. Architecture Comparison
+
+Provide a comparison table covering:
+
+- Architecture and execution flow
+- Implementation complexity
+- Dependencies on existing OneOps API
+- Changes to production systems
+- Infrastructure requirements
+- Performance and scalability
+- Gateway and Governance integration
+- Operational reliability
+- Checkpointing and retry handling
+- Estimated relative implementation effort
+- Cost implications
+- Migration and cutover risks
+- Long-term maintainability
+
+Explain why Option 1 is the preferred strategic design and Option 2 is a practical interim POC.
+
+## 5. Governance and Gateway Requirements
+
+Include the responsibilities and dependencies of:
+
+**Gateway Team**
+- Approved on-premises-to-AWS transfer route
+- Transfer protocol and authentication
+- LVID, GOC, and Country Code requirements
+- File size and throughput limitations
+- Transfer acknowledgement and verification
+- Retry and error handling
+
+**Data Governance Team**
+- Data classification
+- Country-specific transfer restrictions
+- Approved AWS region and S3 destination
+- Encryption and retention requirements
+- Data lineage and audit requirements
+
+**AWS Cloud Team**
+- S3 landing bucket and prefix
+- IAM roles and access policies
+- Encryption using approved KMS keys
+- Network connectivity
+- Logging and monitoring
+
+Clearly distinguish design assumptions from items requiring team confirmation.
+
+## 6. Reliability and Migration Controls
+
+Explain the design for:
+
+- File completeness and stability
+- New and modified file detection
+- Duplicate prevention and idempotency
+- Source-to-S3 checksum verification
+- Durable checkpoints and recovery
+- Transfer failures and retries
+- Source-to-target file reconciliation
+- EOD and expected-count validation
+- Parallel execution of on-premises and AWS Merger
+- Migration rollback and cutover
+- Operational monitoring and alerting
+
+The AWS Merger must be able to independently determine processing success or failure. Do not assume that only files marked `.success` by the on-premises Merger should be transferred.
+
+Differentiate actual source payloads from archive status markers and other operational artifacts.
+
+## 7. Deliverables Required
+
+Prepare the following sections in the final architecture proposal:
+
+1. Executive summary
+2. Existing OneRec architecture
+3. Migration objectives and scope
+4. Option 1 — OneOps API-based parallel delivery
+5. Option 2 — HDFS export-based POC
+6. Architecture diagrams for both options
+7. Detailed end-to-end execution sequence
+8. OneOps API configuration parameter design
+9. Gateway, Governance, and Cloud dependencies
+10. Security, reliability, and failure handling
+11. Comparison and recommendation
+12. Phased implementation roadmap
+13. Design decision and dependency tracker
+14. POC success criteria and acceptance checklist
+15. Open questions for architecture review
+
+Include a tracker with **Task ID, Activity, Description, Owner Team, Priority, Dependency, Status, and Acceptance Criteria**.
+
+## 8. Final Recommendation to Present
+
+Position the proposal as a two-phase migration strategy:
+
+**Phase 1 — POC:** Export eligible source files from HDFS to an approved Linux landing zone, then transfer them to AWS S3 using a lightweight watcher/transfer worker and Gateway integration. Use this to validate connectivity, integrity, and AWS Merger compatibility.
+
+**Phase 2 — Strategic Implementation:** Enhance the existing File Watcher and OneOps API to support configurable parallel delivery to HDFS and AWS S3, eliminating the additional HDFS export dependency.
+
+Emphasize that Spark Structured Streaming remains appropriate for Kafka-based streaming ingestion and distributed data processing, but is not the default choice for simple file discovery and transfer.
+
+The final proposal must be technically defensible, migration-focused, cost-conscious, and suitable for enterprise architecture review.
+
+Avoid generic cloud migration recommendations. Focus specifically on the OneRec file ingestion architecture, existing OneOps API integration, HDFS-to-S3 migration, Gateway requirements, and AWS Merger readiness.
