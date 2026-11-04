@@ -1,0 +1,301 @@
+# Stylus Prompt — OneRec 2.0 AWS Migration: File Ingestion and Gateway Integration Design
+
+Act as a **Principal Enterprise Architect and Senior AWS/Databricks Migration Architect** working on Citi's OneRec reconciliation platform.
+
+Create a comprehensive, technically accurate, **Confluence-ready High-Level Design (HLD) and Solution Design document**.
+
+**Document title:** OneRec 2.0 — OneOps File Ingestion, Gateway Integration & Hybrid AWS Migration Architecture
+
+**Document status:** Proposed / Under Architecture Review
+
+**Audience:** OneRec Engineering, OneOps, Gateway, Data Governance/CBDC, Olympus/HDFS, AWS Cloud, Databricks Platform, Infrastructure, Security, Operations, and Enterprise Architecture.
+
+Use professional enterprise architecture language suitable for internal Citi design reviews. The output must be ready to copy into Confluence with proper headings, tables, architecture diagrams, decision logs, and implementation trackers.
+
+Do not invent existing Citi APIs, approved Gateway interfaces, infrastructure capabilities, policy approvals, or stakeholder sign-offs. Clearly distinguish confirmed findings, assumptions, recommendations, and open decisions.
+
+---
+
+## 1. Executive Summary
+
+Explain the objective of modernizing OneRec file ingestion from the existing Olympus/HDFS environment to AWS S3 and Databricks.
+
+The objective is to enable AWS reconciliation processing while retaining existing on-premises capabilities for restricted workloads.
+
+Propose two implementation approaches:
+
+**Option 1 — Strategic Architecture: Existing File Watcher + OneOps API Enhancement**
+
+Extend the existing File Watcher and OneOps configuration to support independent parallel delivery to HDFS and AWS through the approved Gateway mechanism.
+
+**Option 2 — Interim POC: HDFS Export + Lightweight Transfer Worker**
+
+Read eligible source files from HDFS, export them to an approved Linux landing zone, and use a lightweight file watcher/transfer worker to submit them through Gateway to AWS S3.
+
+Explain why Spark Structured Streaming is not the preferred default for simple file discovery and transfer. Preserve Scala Spark for the actual reconciliation processing.
+
+## 2. Current-State Architecture
+
+Document the current processing flow:
+
+Source Systems → OneOps / Existing File Watcher → Olympus HDFS → DataMerger → CPP → ReconEngine → NAS / Citi Velocity / downstream systems.
+
+Clarify that OneRec both reads and writes operational/intermediate HDFS files. The current File Watcher/OneOps integration and exact source delivery mechanism require code-level validation.
+
+Document the existing Merger archive structure, including success/failure markers, and distinguish original input payloads from processing outcome artifacts.
+
+Include a current-state architecture diagram.
+
+## 3. Target-State Architecture
+
+Create a detailed architecture diagram showing:
+
+- OneOps source systems
+- Existing File Watcher
+- OneOps API configuration and control
+- Governance and CBDC classification
+- Gateway legal-entity derivation and routing
+- Approved AWS S3 landing
+- Databricks Scala Spark Merger, CPP and ReconEngine
+- On-premises processing for restricted datasets
+- NAS and downstream output delivery
+- Transfer audit, monitoring, retries and recovery
+
+Clearly separate the **control plane** (OneOps configuration, policy, orchestration and monitoring) from the **data plane** (file discovery, export, Gateway transfer, S3 delivery and processing).
+
+## 4. Option 1 — Strategic OneOps Integration
+
+Provide a detailed sequence:
+
+1. Source files become available to the existing File Watcher.
+2. File Watcher retrieves its effective configuration from OneOps.
+3. Existing HDFS delivery continues unchanged.
+4. Optional AWS delivery is enabled for selected feeds.
+5. Eligible source files are submitted to Gateway.
+6. Gateway derives legal-entity identifiers and applies approved cloud eligibility policies.
+7. Gateway routes records/files to permitted AWS or on-premises destinations.
+8. AWS delivery is verified.
+9. The AWS Merger consumes approved, complete input datasets.
+10. Transfer and processing statuses are captured for audit and operations.
+
+Describe independent HDFS/AWS transfer status, durable checkpoints, idempotency, replay, failure isolation, and configuration versioning.
+
+Provide a proposed OneOps API parameter table with parameter name, purpose, example, validation rule, and responsible owner.
+
+Include proposed fields for source identity, file pattern, AWS delivery enablement, approved destination, Gateway route, LVID/LEID metadata, country code, data category, retry policy, verification, concurrency and monitoring.
+
+Do not assume that OneOps performs file transfer itself.
+
+## 5. Option 2 — Interim HDFS Export POC
+
+Provide a detailed sequence:
+
+1. Identify the approved HDFS source or archive location.
+2. Select original source payloads, not merely `.success` files.
+3. Export files from HDFS to a dedicated Linux landing zone.
+4. Verify source-to-landing completeness.
+5. Publish completed exports using temporary files and atomic rename where supported.
+6. Discover eligible completed files using lightweight polling.
+7. Submit files to the approved Gateway transfer mechanism.
+8. Apply Gateway classification, derivation and routing.
+9. Verify approved AWS S3 delivery.
+10. Run AWS Merger and compare results against the on-premises baseline.
+
+Compare lightweight Scala/Hadoop FileSystem API polling with Spark Structured Streaming micro-batches. Explain the limitations of Spark file streaming for updates, renames and transfer acknowledgements.
+
+Make clear that HDFS export is a transitional POC option and not a way to bypass Governance or Gateway.
+
+Include a POC architecture diagram and a sequence diagram.
+
+## 6. Gateway Integration and Legal-Entity Routing
+
+Incorporate the following findings from the Gateway discussion:
+
+- Gateway needs a legal-entity identifier to determine permitted processing location.
+- The identifier may be present in the source file or derived from other attributes such as Firm ID or GOM.
+- Feed-specific onboarding rules define how Gateway locates or derives the identifier.
+- Gateway may separate records into approved AWS and restricted on-premises datasets.
+- Gateway may stamp derived legal-entity, country and derivation audit attributes.
+- Pre-partitioning files by legal entity or country may improve transfer efficiency if supported and approved.
+- Restricted data must not be transferred to AWS without explicit approval.
+- Existing IBM S3 usage must not be treated as equivalent to AWS S3 approval.
+
+Confirm the canonical meaning of LVID versus LEID and the exact derived attribute names with Gateway.
+
+Create a Gateway onboarding contract table containing feed ID, format, source schema, identifier field, derivation attributes, data category, country, policy reference, permitted destination and output schema.
+
+Include a record-count reconciliation requirement between source input, approved output, restricted output, quarantined records and explicitly rejected records.
+
+## 7. Hybrid Reconciliation Execution
+
+Define three workload categories:
+
+**Cloud-only:** All required inputs are approved for AWS; execute in Databricks.
+
+**On-premises-only:** Inputs are restricted; execute on-premises.
+
+**Mixed-policy:** Some inputs are cloud-approved while others are restricted. Evaluate whether approved cloud data can be brought back on-premises through an approved route for reconciliation.
+
+Do not assume that federation automatically resolves data residency constraints.
+
+For the initial design, recommend on-premises execution for mixed-policy reconciliations unless an alternative is explicitly approved.
+
+Include a decision matrix for selecting execution location based on left-side and right-side data eligibility.
+
+## 8. Stakeholder Responsibilities and RACI
+
+Include these stakeholders:
+
+1. OneRec Application Engineering
+2. OneOps / Source Integration Team
+3. Gateway / Data Movement Team
+4. Data Governance / CBDC
+5. Olympus / HDFS Platform Team
+6. AWS Cloud Infrastructure
+7. Databricks Platform Engineering
+8. Enterprise Architecture
+9. Information Security / IAM
+10. Network / Connectivity
+11. NAS / Downstream Application Owners
+12. Production Support / Operations
+13. QA / UAT Testing
+14. Business Reconciliation Owners
+
+For each stakeholder, document:
+
+- Role and responsibilities
+- Required technical inputs
+- Design decisions owned
+- Dependencies
+- Expected deliverables
+- Approval or sign-off requirements
+
+Create a RACI matrix across source onboarding, Gateway routing, cloud eligibility, file export, OneOps API enhancement, AWS landing, Databricks processing, validation, security, operations and cutover.
+
+Use proposed owners where formal accountability has not been confirmed.
+
+## 9. Non-Functional Requirements
+
+Cover:
+
+- Reliability and availability
+- File completeness and checksum verification
+- Data integrity and idempotency
+- Retry and recovery
+- Transfer concurrency and throughput
+- Monitoring and observability
+- Auditability and lineage
+- Security and encryption
+- Country-specific data residency
+- Scalability and cost optimization
+- SLA requirements
+- Disaster recovery
+- Rollback and operational support
+
+Do not invent quantitative SLAs or throughput guarantees. Label proposed targets and assumptions.
+
+## 10. Design Comparison
+
+Create a comparison table for Option 1 and Option 2, including:
+
+- Implementation scope
+- Changes to existing systems
+- Operational complexity
+- Gateway dependencies
+- Governance dependencies
+- Cost and infrastructure impact
+- Performance and scalability
+- Reliability
+- Migration risk
+- POC readiness
+- Long-term suitability
+
+Recommend Option 2 for initial validation and Option 1 as the strategic target, subject to source access and Gateway feasibility.
+
+## 11. Implementation Roadmap
+
+Create the following phases:
+
+**Phase 0 — Discovery and Architecture Validation**
+- Confirm existing OneOps and File Watcher behavior.
+- Inventory HDFS reads/writes and archives.
+- Identify source feeds and formats.
+- Confirm Gateway onboarding and CBDC requirements.
+
+**Phase 1 — POC**
+- Select approved UAT source files.
+- Establish HDFS export and Linux landing.
+- Integrate Gateway transfer.
+- Validate AWS S3 delivery and AWS Merger.
+- Compare on-premises and AWS results.
+
+**Phase 2 — Strategic Implementation**
+- Enhance OneOps API configuration.
+- Implement parallel delivery.
+- Introduce durable transfer registry and monitoring.
+- Enable selected production feeds after approvals.
+
+**Phase 3 — Hybrid Processing and Cutover**
+- Classify reconciliations by execution environment.
+- Implement approved hybrid execution patterns.
+- Perform parallel validation.
+- Complete phased cutover and rollback readiness.
+
+## 12. Confluence Implementation Tracker
+
+Create a detailed table with these columns:
+
+| ID | Workstream | Activity | Description | Stakeholder Owner | Dependency | Priority | Status | Acceptance Criteria |
+|---|---|---|---|---|---|---|---|---|
+
+Populate it with at least 20 practical activities covering OneOps, Gateway, CBDC, HDFS, AWS, Databricks, OneRec Engineering, security, testing and operations.
+
+Use **Open / In Progress / Blocked / Completed** as the proposed status values. Do not fabricate completion progress.
+
+## 13. Architecture Decision Records
+
+Include proposed ADRs for:
+
+- Lightweight File Watcher versus Spark Structured Streaming
+- Parallel source delivery versus HDFS export
+- Gateway-controlled cloud routing
+- Legal-entity derivation and record separation
+- Cloud-only versus hybrid execution
+- Original payload preservation
+- Transfer verification and audit
+- Operational ownership and recovery
+
+Each ADR should contain context, options, proposed decision, rationale, consequences and approval status.
+
+## 14. Open Questions and Sign-Off
+
+Include specific open questions for OneOps, Gateway, Governance, Olympus, AWS, Databricks, Security and OneRec.
+
+Add a sign-off matrix with:
+
+| Stakeholder | Reviewer | Review Status | Decision | Comments |
+|---|---|---|---|---|
+
+Leave reviewer names and approvals blank until confirmed.
+
+## 15. Confluence Formatting Requirements
+
+Use:
+
+- Confluence-friendly heading hierarchy
+- Executive summary at the top
+- A document metadata table with version, owner, status and review date
+- A table of contents
+- Mermaid architecture and sequence diagrams where supported, with a text alternative
+- Clear tables for configuration, RACI, dependencies and decisions
+- Expandable technical details where Confluence supports them
+- Clearly identified assumptions, risks, dependencies and unresolved decisions
+- A final action-items section
+
+Write the document in a natural, technically precise engineering style. Avoid generic AI-generated wording, excessive buzzwords and unsupported claims.
+
+The output should read like a genuine enterprise architecture proposal prepared by the OneRec Big Data Engineering team for cross-functional design approval.
+
+**Final architecture recommendation:**
+
+Use the HDFS export-based lightweight POC to validate the approved Gateway-to-AWS transfer path. Progress toward the strategic OneOps-controlled File Watcher integration for parallel delivery, with legal-entity-aware routing and on-premises processing retained for restricted reconciliation workloads.
